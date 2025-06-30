@@ -1,0 +1,2421 @@
+test:.
+├───.env.local
+├───App.tsx
+├───README.md
+├───components
+│   │   ├───Header.tsx
+│   │   ├───editor
+│   │   │   │   ├───ContentEditor.tsx
+│   │   │   │   ├───DesignEditor.tsx
+│   │   │   │   ├───EditorControls.tsx
+│   │   │   │   ├───ResumePreview.tsx
+│   │   │   │   └───templates
+│   │       │   │       ├───CreativeSplitTemplate.tsx
+│   │       │   │       ├───ExecutiveTemplate.tsx
+│   │       │   │       ├───MinimalistTemplate.tsx
+│   │       │   │       └───ModernTemplate.tsx
+│   │   ├───pages
+│   │   │   │   ├───AuthPage.tsx
+│   │   │   │   ├───DashboardPage.tsx
+│   │   │   │   ├───EditorPage.tsx
+│   │   │   │   ├───LandingPage.tsx
+│   │   │   │   ├───TemplateSelectionPage.tsx
+│   │   │   │   └───VerificationPage.tsx
+│   │   └───ui
+│       │       ├───Accordion.tsx
+│       │       └───RichTextField.tsx
+├───constants.ts
+├───index.html
+├───index.tsx
+├───metadata.json
+├───output.txt
+├───package-lock.json
+├───package.json
+├───parser.py
+├───tsconfig.json
+├───types.ts
+└───vite.config.ts
+
+
+test/.env.local
+GEMINI_API_KEY=PLACEHOLDER_API_KEY
+
+
+
+test/App.tsx
+import React, { useState, useCallback, useEffect } from 'react';
+import { Page, TemplateId, Resume } from './types';
+import Header from './components/Header';
+import LandingPage from './components/pages/LandingPage';
+import AuthPage from './components/pages/AuthPage';
+import DashboardPage from './components/pages/DashboardPage';
+import TemplateSelectionPage from './components/pages/TemplateSelectionPage';
+import EditorPage from './components/pages/EditorPage';
+import VerificationPage from './components/pages/VerificationPage';
+import { initialResumeData } from './constants';
+import { Amplify } from 'aws-amplify';
+import { getCurrentUser, fetchUserAttributes, signOut } from 'aws-amplify/auth';
+
+// Configure AWS Amplify for Cognito
+Amplify.configure({
+  Auth: {
+    Cognito: {
+      userPoolId: 'us-east-1_mNRdPxfMo',
+      userPoolClientId: '74cgfmen18ceort0trc0ch3oc3',
+    },
+  },
+});
+
+type User = {
+  username: string;
+  given_name?: string;
+  family_name?: string;
+  email?: string;
+}
+
+const App: React.FC = () => {
+  const [currentPage, setCurrentPage] = useState<Page>(Page.Landing);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [resumes, setResumes] = useState<Resume[]>([]);
+  const [editingResume, setEditingResume] = useState<Resume | null>(null);
+  const [verificationEmail, setVerificationEmail] = useState<string>('');
+  
+  const checkUser = useCallback(async () => {
+    try {
+      const cognitoUser = await getCurrentUser();
+      const attributes = await fetchUserAttributes();
+      setUser({ username: cognitoUser.username, ...attributes });
+      setIsAuthenticated(true);
+      return true;
+    } catch (error) {
+      setIsAuthenticated(false);
+      setUser(null);
+      return false;
+    }
+  }, []);
+
+  useEffect(() => {
+    const initialCheck = async () => {
+      await checkUser();
+      setIsLoading(false);
+    };
+    initialCheck();
+  }, [checkUser]);
+
+  const handleLoginSuccess = useCallback(async () => {
+    setIsLoading(true);
+    const loggedIn = await checkUser();
+    if(loggedIn) {
+      setCurrentPage(Page.Dashboard);
+    }
+    setIsLoading(false);
+  }, [checkUser]);
+
+  const handleLogout = useCallback(async () => {
+    try {
+      await signOut();
+      setIsAuthenticated(false);
+      setUser(null);
+      setCurrentPage(Page.Landing);
+    } catch (error) {
+      console.error('Error signing out:', error);
+    }
+  }, []);
+  
+  const navigateTo = useCallback((page: Page) => {
+    setCurrentPage(page);
+  }, []);
+
+  const navigateToVerification = useCallback((email: string) => {
+    setVerificationEmail(email);
+    setCurrentPage(Page.Verification);
+  }, []);
+
+  const handleVerificationSuccess = useCallback(() => {
+    // After verification, user needs to sign in.
+    alert('Verification successful! Please sign in.');
+    setCurrentPage(Page.Auth);
+    setVerificationEmail('');
+  }, []);
+
+  const startNewResume = useCallback(() => {
+    setCurrentPage(Page.TemplateSelection);
+  }, []);
+
+  const selectTemplate = useCallback((templateId: TemplateId) => {
+    const newResume: Resume = {
+      ...initialResumeData,
+      id: crypto.randomUUID(),
+      template: templateId,
+      title: 'Untitled Resume',
+    };
+    setEditingResume(newResume);
+    setCurrentPage(Page.Editor);
+  }, []);
+
+  const editResume = useCallback((resumeId: string) => {
+      const resumeToEdit = resumes.find(r => r.id === resumeId);
+      if (resumeToEdit) {
+          setEditingResume(resumeToEdit);
+          setCurrentPage(Page.Editor);
+      }
+  }, [resumes]);
+
+  const saveResume = useCallback((updatedResume: Resume) => {
+    setResumes(prevResumes => {
+      const exists = prevResumes.some(r => r.id === updatedResume.id);
+      if (exists) {
+        return prevResumes.map(r => r.id === updatedResume.id ? updatedResume : r);
+      }
+      return [...prevResumes, updatedResume];
+    });
+    setEditingResume(null);
+    setCurrentPage(Page.Dashboard);
+  }, []);
+
+  const renderPage = () => {
+    if (isLoading) {
+      return (
+        <div className="flex justify-center items-center h-[calc(100vh-64px)]">
+          <p className="text-lg text-slate-500">Loading...</p>
+        </div>
+      );
+    }
+
+    if (!isAuthenticated) {
+        switch (currentPage) {
+            case Page.Landing:
+                return <LandingPage onNavigateToAuth={() => navigateTo(Page.Auth)} />;
+            case Page.Auth:
+                 return <AuthPage onLoginSuccess={handleLoginSuccess} onNavigateToVerification={navigateToVerification}/>;
+            case Page.Verification:
+                 return <VerificationPage email={verificationEmail} onVerificationSuccess={handleVerificationSuccess} onBackToAuth={() => navigateTo(Page.Auth)} />;
+            default:
+                return <LandingPage onNavigateToAuth={() => navigateTo(Page.Auth)} />;
+        }
+    }
+
+    switch (currentPage) {
+      case Page.Dashboard:
+        return <DashboardPage resumes={resumes} onNewResume={startNewResume} onEditResume={editResume} />;
+      case Page.TemplateSelection:
+        return <TemplateSelectionPage onSelectTemplate={selectTemplate} />;
+      case Page.Editor:
+        if (editingResume) {
+          return <EditorPage initialResume={editingResume} onSave={saveResume} onBack={() => setCurrentPage(Page.Dashboard)} />;
+        }
+        // Fallback if no resume is being edited
+        setCurrentPage(Page.Dashboard);
+        return null; 
+      default:
+        setCurrentPage(Page.Dashboard);
+        return <DashboardPage resumes={resumes} onNewResume={startNewResume} onEditResume={editResume}/>;
+    }
+  };
+
+  return (
+    <div className="bg-slate-50 min-h-screen text-slate-800">
+      <Header isAuthenticated={isAuthenticated} user={user} onLogout={handleLogout} onDashboardClick={() => navigateTo(Page.Dashboard)} />
+      <main>
+        {renderPage()}
+      </main>
+    </div>
+  );
+};
+
+export default App;
+
+
+
+test/constants.ts
+
+import { Resume, TemplateId } from './types';
+
+export const initialResumeData: Omit<Resume, 'id' | 'template' | 'title'> = {
+  theme: {
+    primaryColor: 'bg-blue-600',
+    accentColor: 'bg-blue-500'
+  },
+  contact: {
+    name: 'Your Name',
+    email: 'your.email@example.com',
+    phone: '(555) 123-4567',
+    linkedin: 'linkedin.com/in/yourprofile',
+    website: 'yourportfolio.com',
+    address: 'Your City, Your State',
+  },
+  summary: 'A brief summary of your career objectives and qualifications.',
+  experience: [],
+  education: [],
+  skills: ['React', 'TypeScript', 'Tailwind CSS', 'Node.js'],
+  customSections: [],
+};
+
+export const TEMPLATES = [
+  { id: TemplateId.Modern, name: 'Modern', imageUrl: 'https://picsum.photos/seed/modern/400/500' },
+  { id: TemplateId.Minimalist, name: 'Minimalist', imageUrl: 'https://picsum.photos/seed/minimalist/400/500' },
+  { id: TemplateId.Executive, name: 'Executive', imageUrl: 'https://picsum.photos/seed/executive/400/500' },
+  { id: TemplateId.CreativeSplit, name: 'Creative Split', imageUrl: 'https://picsum.photos/seed/creative/400/500' },
+];
+
+export const THEME_COLORS = {
+  primary: [
+    { name: 'Blue', value: 'bg-blue-600' },
+    { name: 'Green', value: 'bg-green-600' },
+    { name: 'Indigo', value: 'bg-indigo-600' },
+    { name: 'Slate', value: 'bg-slate-800' },
+  ],
+  accent: [
+    { name: 'Pink', value: 'bg-pink-500' },
+    { name: 'Teal', value: 'bg-teal-500' },
+    { name: 'Yellow', value: 'bg-yellow-500' },
+    { name: 'Orange', value: 'bg-orange-500' },
+  ],
+};
+
+
+
+test/index.html
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ProResume: AI-Powered Resume Builder</title>
+    <script src="https://cdn.tailwindcss.com?plugins=typography"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script>
+    // Polyfill for AWS Amplify
+    if (typeof window.global === 'undefined') {
+      window.global = window;
+    }
+  </script>
+  <script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@^19.1.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.1.0/",
+    "react/": "https://esm.sh/react@^19.1.0/",
+    "@google/genai": "https://esm.sh/@google/genai@^1.7.0",
+    "aws-amplify": "https://esm.sh/aws-amplify@^6.4.2",
+    "aws-amplify/auth": "https://esm.sh/aws-amplify@^6.4.2/auth",
+    "@aws-amplify/auth": "https://esm.sh/@aws-amplify/auth@^6.13.1",
+    "aws-amplify/": "https://esm.sh/aws-amplify@^6.15.1/"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body class="bg-slate-50">
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>
+
+
+
+test/index.tsx
+
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import App from './App';
+
+const rootElement = document.getElementById('root');
+if (!rootElement) {
+  throw new Error("Could not find root element to mount to");
+}
+
+const root = ReactDOM.createRoot(rootElement);
+root.render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
+
+
+
+test/metadata.json
+{
+  "name": "ProResume: AI-Powered Resume Builder",
+  "description": "Create, manage, and share a standout resume in minutes. Our AI-powered tools and professional templates make it simple to land your dream job.",
+  "requestFramePermissions": [],
+  "prompt": ""
+}
+
+
+
+test/output.txt
+test:.
+├───.env.local
+├───App.tsx
+├───README.md
+├───components
+│   │   ├───Header.tsx
+│   │   ├───editor
+│   │   │   │   ├───ContentEditor.tsx
+│   │   │   │   ├───DesignEditor.tsx
+│   │   │   │   ├───EditorControls.tsx
+│   │   │   │   ├───ResumePreview.tsx
+│   │   │   │   └───templates
+│   │       │   │       ├───CreativeSplitTemplate.tsx
+│   │       │   │       ├───ExecutiveTemplate.tsx
+│   │       │   │       ├───MinimalistTemplate.tsx
+│   │       │   │       └───ModernTemplate.tsx
+│   │   ├───pages
+│   │   │   │   ├───AuthPage.tsx
+│   │   │   │   ├───DashboardPage.tsx
+│   │   │   │   ├───EditorPage.tsx
+│   │   │   │   ├───LandingPage.tsx
+│   │   │   │   ├───TemplateSelectionPage.tsx
+│   │   │   │   └───VerificationPage.tsx
+│   │   └───ui
+│       │       ├───Accordion.tsx
+│       │       └───RichTextField.tsx
+├───constants.ts
+├───index.html
+├───index.tsx
+├───metadata.json
+├───output.txt
+├───package-lock.json
+├───package.json
+├───parser.py
+├───tsconfig.json
+├───types.ts
+└───vite.config.ts
+
+
+test/.env.local
+GEMINI_API_KEY=PLACEHOLDER_API_KEY
+
+
+
+test/App.tsx
+import React, { useState, useCallback, useEffect } from 'react';
+import { Page, TemplateId, Resume } from './types';
+import Header from './components/Header';
+import LandingPage from './components/pages/LandingPage';
+import AuthPage from './components/pages/AuthPage';
+import DashboardPage from './components/pages/DashboardPage';
+import TemplateSelectionPage from './components/pages/TemplateSelectionPage';
+import EditorPage from './components/pages/EditorPage';
+import VerificationPage from './components/pages/VerificationPage';
+import { initialResumeData } from './constants';
+import { Amplify } from 'aws-amplify';
+import { getCurrentUser, fetchUserAttributes, signOut } from 'aws-amplify/auth';
+
+// Configure AWS Amplify for Cognito
+Amplify.configure({
+  Auth: {
+    Cognito: {
+      userPoolId: 'us-east-1_mNRdPxfMo',
+      userPoolClientId: '74cgfmen18ceort0trc0ch3oc3',
+    },
+  },
+});
+
+type User = {
+  username: string;
+  given_name?: string;
+  family_name?: string;
+  email?: string;
+}
+
+const App: React.FC = () => {
+  const [currentPage, setCurrentPage] = useState<Page>(Page.Landing);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [resumes, setResumes] = useState<Resume[]>([]);
+  const [editingResume, setEditingResume] = useState<Resume | null>(null);
+  const [verificationEmail, setVerificationEmail] = useState<string>('');
+  
+  const checkUser = useCallback(async () => {
+    try {
+      const cognitoUser = await getCurrentUser();
+      const attributes = await fetchUserAttributes();
+      setUser({ username: cognitoUser.username, ...attributes });
+      setIsAuthenticated(true);
+      return true;
+    } catch (error) {
+      setIsAuthenticated(false);
+      setUser(null);
+      return false;
+    }
+  }, []);
+
+  useEffect(() => {
+    const initialCheck = async () => {
+      await checkUser();
+      setIsLoading(false);
+    };
+    initialCheck();
+  }, [checkUser]);
+
+  const handleLoginSuccess = useCallback(async () => {
+    setIsLoading(true);
+    const loggedIn = await checkUser();
+    if(loggedIn) {
+      setCurrentPage(Page.Dashboard);
+    }
+    setIsLoading(false);
+  }, [checkUser]);
+
+  const handleLogout = useCallback(async () => {
+    try {
+      await signOut();
+      setIsAuthenticated(false);
+      setUser(null);
+      setCurrentPage(Page.Landing);
+    } catch (error) {
+      console.error('Error signing out:', error);
+    }
+  }, []);
+  
+  const navigateTo = useCallback((page: Page) => {
+    setCurrentPage(page);
+  }, []);
+
+  const navigateToVerification = useCallback((email: string) => {
+    setVerificationEmail(email);
+    setCurrentPage(Page.Verification);
+  }, []);
+
+  const handleVerificationSuccess = useCallback(() => {
+    // After verification, user needs to sign in.
+    alert('Verification successful! Please sign in.');
+    setCurrentPage(Page.Auth);
+    setVerificationEmail('');
+  }, []);
+
+  const startNewResume = useCallback(() => {
+    setCurrentPage(Page.TemplateSelection);
+  }, []);
+
+  const selectTemplate = useCallback((templateId: TemplateId) => {
+    const newResume: Resume = {
+      ...initialResumeData,
+      id: crypto.randomUUID(),
+      template: templateId,
+      title: 'Untitled Resume',
+    };
+    setEditingResume(newResume);
+    setCurrentPage(Page.Editor);
+  }, []);
+
+  const editResume = useCallback((resumeId: string) => {
+      const resumeToEdit = resumes.find(r => r.id === resumeId);
+      if (resumeToEdit) {
+          setEditingResume(resumeToEdit);
+          setCurrentPage(Page.Editor);
+      }
+  }, [resumes]);
+
+  const saveResume = useCallback((updatedResume: Resume) => {
+    setResumes(prevResumes => {
+      const exists = prevResumes.some(r => r.id === updatedResume.id);
+      if (exists) {
+        return prevResumes.map(r => r.id === updatedResume.id ? updatedResume : r);
+      }
+      return [...prevResumes, updatedResume];
+    });
+    setEditingResume(null);
+    setCurrentPage(Page.Dashboard);
+  }, []);
+
+  const renderPage = () => {
+    if (isLoading) {
+      return (
+        <div className="flex justify-center items-center h-[calc(100vh-64px)]">
+          <p className="text-lg text-slate-500">Loading...</p>
+        </div>
+      );
+    }
+
+    if (!isAuthenticated) {
+        switch (currentPage) {
+            case Page.Landing:
+                return <LandingPage onNavigateToAuth={() => navigateTo(Page.Auth)} />;
+            case Page.Auth:
+                 return <AuthPage onLoginSuccess={handleLoginSuccess} onNavigateToVerification={navigateToVerification}/>;
+            case Page.Verification:
+                 return <VerificationPage email={verificationEmail} onVerificationSuccess={handleVerificationSuccess} onBackToAuth={() => navigateTo(Page.Auth)} />;
+            default:
+                return <LandingPage onNavigateToAuth={() => navigateTo(Page.Auth)} />;
+        }
+    }
+
+    switch (currentPage) {
+      case Page.Dashboard:
+        return <DashboardPage resumes={resumes} onNewResume={startNewResume} onEditResume={editResume} />;
+      case Page.TemplateSelection:
+        return <TemplateSelectionPage onSelectTemplate={selectTemplate} />;
+      case Page.Editor:
+        if (editingResume) {
+          return <EditorPage initialResume={editingResume} onSave={saveResume} onBack={() => setCurrentPage(Page.Dashboard)} />;
+        }
+        // Fallback if no resume is being edited
+        setCurrentPage(Page.Dashboard);
+        return null; 
+      default:
+        setCurrentPage(Page.Dashboard);
+        return <DashboardPage resumes={resumes} onNewResume={startNewResume} onEditResume={editResume}/>;
+    }
+  };
+
+  return (
+    <div className="bg-slate-50 min-h-screen text-slate-800">
+      <Header isAuthenticated={isAuthenticated} user={user} onLogout={handleLogout} onDashboardClick={() => navigateTo(Page.Dashboard)} />
+      <main>
+        {renderPage()}
+      </main>
+    </div>
+  );
+};
+
+export default App;
+
+
+
+test/constants.ts
+
+import { Resume, TemplateId } from './types';
+
+export const initialResumeData: Omit<Resume, 'id' | 'template' | 'title'> = {
+  theme: {
+    primaryColor: 'bg-blue-600',
+    accentColor: 'bg-blue-500'
+  },
+  contact: {
+    name: 'Your Name',
+    email: 'your.email@example.com',
+    phone: '(555) 123-4567',
+    linkedin: 'linkedin.com/in/yourprofile',
+    website: 'yourportfolio.com',
+    address: 'Your City, Your State',
+  },
+  summary: 'A brief summary of your career objectives and qualifications.',
+  experience: [],
+  education: [],
+  skills: ['React', 'TypeScript', 'Tailwind CSS', 'Node.js'],
+  customSections: [],
+};
+
+export const TEMPLATES = [
+  { id: TemplateId.Modern, name: 'Modern', imageUrl: 'https://picsum.photos/seed/modern/400/500' },
+  { id: TemplateId.Minimalist, name: 'Minimalist', imageUrl: 'https://picsum.photos/seed/minimalist/400/500' },
+  { id: TemplateId.Executive, name: 'Executive', imageUrl: 'https://picsum.photos/seed/executive/400/500' },
+  { id: TemplateId.CreativeSplit, name: 'Creative Split', imageUrl: 'https://picsum.photos/seed/creative/400/500' },
+];
+
+export const THEME_COLORS = {
+  primary: [
+    { name: 'Blue', value: 'bg-blue-600' },
+    { name: 'Green', value: 'bg-green-600' },
+    { name: 'Indigo', value: 'bg-indigo-600' },
+    { name: 'Slate', value: 'bg-slate-800' },
+  ],
+  accent: [
+    { name: 'Pink', value: 'bg-pink-500' },
+    { name: 'Teal', value: 'bg-teal-500' },
+    { name: 'Yellow', value: 'bg-yellow-500' },
+    { name: 'Orange', value: 'bg-orange-500' },
+  ],
+};
+
+
+
+test/package.json
+{
+  "name": "proresume-ai-powered-resume-builder",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "@google/genai": "^1.7.0",
+    "aws-amplify": "^6.15.1",
+    "@aws-amplify/auth": "^6.13.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "typescript": "~5.7.2",
+    "vite": "^6.2.0"
+  }
+}
+
+
+
+test/parser.py
+import os
+
+# Specify the directory path here
+directory = "C:\\Users\\SAMPATH REDDY\\OneDrive\\Desktop\\test"  # Replace with your directory path
+directory_name = os.path.basename(os.path.normpath(directory))
+output_file_name = "output.txt"
+
+def print_directory_structure(root_dir, prefix="", output_list=None):
+    if output_list is None:
+        output_list = []
+    
+    # Get all entries in the directory
+    entries = sorted(os.listdir(root_dir))
+    for index, entry in enumerate(entries):
+        full_path = os.path.join(root_dir, entry)
+        # Skip node_modules
+        if entry == "node_modules":
+            continue
+        # Determine the prefix for the current entry
+        is_last = index == len(entries) - 1
+        current_prefix = prefix + ("└───" if is_last else "├───")
+        if os.path.isdir(full_path):
+            output_list.append(f"{prefix}{current_prefix}{entry}")
+            # Recursively process subdirectory
+            next_prefix = prefix + ("    " if is_last else "│   ")
+            print_directory_structure(full_path, next_prefix, output_list)
+        else:
+            # Skip .gitignore and package_lock.json in directory structure
+            if entry not in [".gitignore", "package_lock.json"]:
+                output_list.append(f"{prefix}{current_prefix}{entry}")
+    
+    return output_list
+
+with open(output_file_name, 'w', encoding='utf-8') as output_file:
+    # Write directory structure
+    output_file.write(f"{directory_name}:.\n")
+    dir_structure = print_directory_structure(directory)
+    for line in dir_structure:
+        output_file.write(line + '\n')
+    output_file.write('\n\n')  # Two blank lines after directory structure
+
+    # Write file paths and contents
+    for root, dirs, files in os.walk(directory):
+        # Skip node_modules directory
+        if 'node_modules' in dirs:
+            dirs.remove('node_modules')
+        
+        for file in files:
+            # Skip .gitignore and package_lock.json
+            if file in ['.gitignore', 'package-lock.json']:
+                continue
+                
+            full_path = os.path.join(root, file)
+            relative_path = os.path.relpath(full_path, directory).replace(os.sep, '/')
+            output_path = directory_name + '/' + relative_path
+            try:
+                with open(full_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                output_file.write(output_path + '\n')
+                output_file.write(content)
+                if not content.endswith('\n'):
+                    output_file.write('\n')
+                output_file.write('\n\n\n')  # Add three blank lines after each file
+            except Exception as e:
+                print(f"Error reading {full_path}: {e}")
+
+
+
+test/README.md
+# Run and deploy your AI Studio app
+
+This contains everything you need to run your app locally.
+
+## Run Locally
+
+**Prerequisites:**  Node.js
+
+
+1. Install dependencies:
+   `npm install`
+2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+3. Run the app:
+   `npm run dev`
+
+
+
+test/tsconfig.json
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "experimentalDecorators": true,
+    "useDefineForClassFields": false,
+    "module": "ESNext",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "allowJs": true,
+    "jsx": "react-jsx",
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true,
+
+    "paths": {
+      "@/*" :  ["./*"]
+    }
+  }
+}
+
+
+
+test/types.ts
+export enum Page {
+  Landing,
+  Auth,
+  Verification,
+  Dashboard,
+  TemplateSelection,
+  Editor,
+}
+
+export enum TemplateId {
+  Modern = 'Modern',
+  Minimalist = 'Minimalist',
+  Executive = 'Executive',
+  CreativeSplit = 'CreativeSplit',
+}
+
+export interface ContactInfo {
+  name: string;
+  email: string;
+  phone: string;
+  linkedin: string;
+  website: string;
+  address: string;
+}
+
+export interface WorkExperience {
+  id: string;
+  jobTitle: string;
+  company: string;
+  location: string;
+  startDate: string;
+  endDate: string;
+  description: string;
+}
+
+export interface Education {
+  id: string;
+  school: string;
+  degree: string;
+  location:string;
+  startDate: string;
+  endDate: string;
+}
+
+export interface CustomSection {
+  id: string;
+  title: string;
+  content: string;
+}
+
+export interface Theme {
+    primaryColor: string;
+    accentColor: string;
+}
+
+export interface Resume {
+  id: string;
+  title: string;
+  template: TemplateId;
+  theme: Theme;
+  contact: ContactInfo;
+  summary: string;
+  experience: WorkExperience[];
+  education: Education[];
+  skills: string[];
+  customSections: CustomSection[];
+}
+
+declare global {
+  interface Window {
+    jspdf: {
+      jsPDF: new (options?: any) => any;
+    };
+    html2canvas: (element: HTMLElement, options?: any) => Promise<HTMLCanvasElement>;
+  }
+}
+
+
+
+test/vite.config.ts
+import path from 'path';
+import { defineConfig, loadEnv } from 'vite';
+
+export default defineConfig(({ mode }) => {
+    const env = loadEnv(mode, '.', '');
+    return {
+      define: {
+        'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
+        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
+      },
+      resolve: {
+        alias: {
+          '@': path.resolve(__dirname, '.'),
+        }
+      }
+    };
+});
+
+
+
+test/components/Header.tsx
+import React, { useState, useEffect, useRef } from 'react';
+
+interface HeaderProps {
+  isAuthenticated: boolean;
+  user: {
+    given_name?: string;
+    family_name?: string;
+    email?: string;
+  } | null;
+  onLogout: () => void;
+  onDashboardClick: () => void;
+}
+
+const Header: React.FC<HeaderProps> = ({ isAuthenticated, user, onLogout, onDashboardClick }) => {
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setIsDropdownOpen(false);
+      }
+    };
+
+    if (isDropdownOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isDropdownOpen]);
+
+  const getInitials = () => {
+    if (!user) return 'U';
+    const firstNameInitial = user.given_name?.[0] || '';
+    const lastNameInitial = user.family_name?.[0] || '';
+    if (firstNameInitial && lastNameInitial) {
+      return `${firstNameInitial}${lastNameInitial}`.toUpperCase();
+    }
+    return (user.email?.[0] || 'U').toUpperCase();
+  };
+
+  return (
+    <header className="bg-white/80 backdrop-blur-lg sticky top-0 z-30 shadow-sm">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="flex justify-between items-center h-16">
+          {isAuthenticated ? (
+            <>
+              {/* Left Side: Branding */}
+              <div className="flex-shrink-0">
+                <h1 className="text-2xl font-bold text-indigo-600 cursor-pointer" onClick={onDashboardClick}>ProResume</h1>
+              </div>
+
+              {/* Right Side: Navigation & Profile */}
+              <div className="flex items-center space-x-6">
+                <button onClick={onDashboardClick} className="text-sm font-medium text-slate-600 hover:text-indigo-600 transition-colors">
+                  Dashboard
+                </button>
+                
+                {/* Profile Dropdown */}
+                <div className="relative" ref={dropdownRef}>
+                  <button
+                    onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                    className="w-10 h-10 bg-indigo-600 rounded-full flex items-center justify-center text-white font-bold text-sm focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+                    aria-haspopup="true"
+                    aria-expanded={isDropdownOpen}
+                  >
+                    {getInitials()}
+                  </button>
+
+                  {isDropdownOpen && (
+                    <div
+                      className="origin-top-right absolute right-0 mt-2 w-48 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 focus:outline-none"
+                      role="menu"
+                      aria-orientation="vertical"
+                      aria-labelledby="user-menu-button"
+                    >
+                      <div className="py-1" role="none">
+                        <button
+                          onClick={() => {
+                            onLogout();
+                            setIsDropdownOpen(false);
+                          }}
+                          className="w-full text-left block px-4 py-2 text-sm text-slate-700 hover:bg-slate-100"
+                          role="menuitem"
+                        >
+                          Logout
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </>
+          ) : (
+            // Unauthenticated: Brand on the left
+            <div className="flex-shrink-0">
+              <h1 className="text-2xl font-bold text-indigo-600 cursor-pointer" onClick={onDashboardClick}>ProResume</h1>
+            </div>
+          )}
+        </div>
+      </div>
+    </header>
+  );
+};
+
+export default Header;
+
+
+
+test/components/editor/ContentEditor.tsx
+import React, { useState } from 'react';
+import { Resume, WorkExperience, Education, CustomSection } from '../../types';
+import Accordion from '../ui/Accordion';
+import RichTextField from '../ui/RichTextField';
+
+interface ContentEditorProps {
+  resume: Resume;
+  onUpdate: (resume: Resume) => void;
+}
+
+const Input: React.FC<React.InputHTMLAttributes<HTMLInputElement> & { label: string }> = ({ label, ...props }) => (
+    <div>
+        <label className="text-sm font-medium text-slate-600">{label}</label>
+        <input {...props} className="mt-1 block w-full px-3 py-2 bg-white border border-slate-300 rounded-md text-sm shadow-sm placeholder-slate-400 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"/>
+    </div>
+);
+
+const ContentEditor: React.FC<ContentEditorProps> = ({ resume, onUpdate }) => {
+    const [newSkill, setNewSkill] = useState('');
+
+    const handleGenericChange = (section: keyof Resume, value: any) => {
+        onUpdate({ ...resume, [section]: value });
+    };
+
+    const handleContactChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        handleGenericChange('contact', { ...resume.contact, [e.target.name]: e.target.value });
+    };
+    
+    // --- Work Experience ---
+    const handleExperienceChange = (id: string, field: keyof WorkExperience, value: string) => {
+        const updated = resume.experience.map(exp => exp.id === id ? { ...exp, [field]: value } : exp);
+        handleGenericChange('experience', updated);
+    };
+    const addExperience = () => {
+        const newExp: WorkExperience = { id: crypto.randomUUID(), jobTitle: '', company: '', location: '', startDate: '', endDate: '', description: '' };
+        handleGenericChange('experience', [...resume.experience, newExp]);
+    };
+    const deleteExperience = (id: string) => {
+        handleGenericChange('experience', resume.experience.filter(exp => exp.id !== id));
+    };
+
+    // --- Education ---
+    const handleEducationChange = (id: string, field: keyof Education, value: string) => {
+        const updated = resume.education.map(edu => edu.id === id ? { ...edu, [field]: value } : edu);
+        handleGenericChange('education', updated);
+    };
+    const addEducation = () => {
+        const newEdu: Education = { id: crypto.randomUUID(), school: '', degree: '', location: '', startDate: '', endDate: '' };
+        handleGenericChange('education', [...resume.education, newEdu]);
+    };
+    const deleteEducation = (id: string) => {
+        handleGenericChange('education', resume.education.filter(edu => edu.id !== id));
+    };
+
+    // --- Skills ---
+    const addSkill = (e: React.FormEvent) => {
+        e.preventDefault();
+        if (newSkill.trim() && !resume.skills.includes(newSkill.trim())) {
+            handleGenericChange('skills', [...resume.skills, newSkill.trim()]);
+            setNewSkill('');
+        }
+    };
+    const deleteSkill = (skill: string) => {
+        handleGenericChange('skills', resume.skills.filter(s => s !== skill));
+    };
+
+    // --- Custom Sections ---
+    const handleCustomSectionChange = (id: string, field: keyof CustomSection, value: string) => {
+        const updated = resume.customSections.map(sec => sec.id === id ? { ...sec, [field]: value } : sec);
+        handleGenericChange('customSections', updated);
+    };
+    const addCustomSection = () => {
+        const newSec: CustomSection = { id: crypto.randomUUID(), title: 'New Section', content: '' };
+        handleGenericChange('customSections', [...resume.customSections, newSec]);
+    };
+    const deleteCustomSection = (id: string) => {
+        handleGenericChange('customSections', resume.customSections.filter(sec => sec.id !== id));
+    };
+
+  return (
+    <div className="space-y-4">
+      <Accordion title="Contact Information" initialOpen={true}>
+          <div className="space-y-4 p-4">
+              <Input label="Full Name" name="name" value={resume.contact.name} onChange={handleContactChange} />
+              <Input label="Email" name="email" value={resume.contact.email} onChange={handleContactChange} />
+              <Input label="Phone Number" name="phone" value={resume.contact.phone} onChange={handleContactChange} />
+              <Input label="Address" name="address" value={resume.contact.address} onChange={handleContactChange} />
+              <Input label="LinkedIn Profile" name="linkedin" value={resume.contact.linkedin} onChange={handleContactChange} />
+              <Input label="Website/Portfolio" name="website" value={resume.contact.website} onChange={handleContactChange} />
+          </div>
+      </Accordion>
+      <Accordion title="Professional Summary" initialOpen={true}>
+        <div className="p-4 space-y-2">
+            <RichTextField htmlContent={resume.summary} onHtmlChange={(html) => onUpdate({...resume, summary: html})} />
+        </div>
+      </Accordion>
+      <Accordion title="Work Experience">
+          <div className="p-4 space-y-4">
+              {resume.experience.map(exp => (
+                  <div key={exp.id} className="p-4 border border-slate-200 rounded-lg space-y-3">
+                      <Input label="Job Title" value={exp.jobTitle} onChange={e => handleExperienceChange(exp.id, 'jobTitle', e.target.value)} />
+                      <Input label="Company" value={exp.company} onChange={e => handleExperienceChange(exp.id, 'company', e.target.value)} />
+                      <Input label="Location" value={exp.location} onChange={e => handleExperienceChange(exp.id, 'location', e.target.value)} />
+                      <div className="grid grid-cols-2 gap-4">
+                         <Input label="Start Date" value={exp.startDate} onChange={e => handleExperienceChange(exp.id, 'startDate', e.target.value)} />
+                         <Input label="End Date" value={exp.endDate} onChange={e => handleExperienceChange(exp.id, 'endDate', e.target.value)} />
+                      </div>
+                      <div>
+                          <label className="text-sm font-medium text-slate-600">Description</label>
+                          <RichTextField htmlContent={exp.description} onHtmlChange={html => handleExperienceChange(exp.id, 'description', html)} />
+                      </div>
+                      <button onClick={() => deleteExperience(exp.id)} className="text-sm text-red-500 hover:text-red-700">Remove Experience</button>
+                  </div>
+              ))}
+              <button onClick={addExperience} className="w-full px-4 py-2 text-sm font-semibold rounded-md border-2 border-dashed border-slate-300 text-slate-500 hover:border-indigo-500 hover:text-indigo-500">+ Add Experience</button>
+          </div>
+      </Accordion>
+      <Accordion title="Education">
+          <div className="p-4 space-y-4">
+              {resume.education.map(edu => (
+                  <div key={edu.id} className="p-4 border border-slate-200 rounded-lg space-y-3">
+                      <Input label="School/University" value={edu.school} onChange={e => handleEducationChange(edu.id, 'school', e.target.value)} />
+                      <Input label="Degree/Field of Study" value={edu.degree} onChange={e => handleEducationChange(edu.id, 'degree', e.target.value)} />
+                      <Input label="Location" value={edu.location} onChange={e => handleEducationChange(edu.id, 'location', e.target.value)} />
+                      <div className="grid grid-cols-2 gap-4">
+                         <Input label="Start Date" value={edu.startDate} onChange={e => handleEducationChange(edu.id, 'startDate', e.target.value)} />
+                         <Input label="End Date" value={edu.endDate} onChange={e => handleEducationChange(edu.id, 'endDate', e.target.value)} />
+                      </div>
+                      <button onClick={() => deleteEducation(edu.id)} className="text-sm text-red-500 hover:text-red-700">Remove Education</button>
+                  </div>
+              ))}
+              <button onClick={addEducation} className="w-full px-4 py-2 text-sm font-semibold rounded-md border-2 border-dashed border-slate-300 text-slate-500 hover:border-indigo-500 hover:text-indigo-500">+ Add Education</button>
+          </div>
+      </Accordion>
+       <Accordion title="Skills">
+          <div className="p-4 space-y-4">
+             <div className="flex flex-wrap gap-2">
+                 {resume.skills.map(skill => (
+                     <span key={skill} className="flex items-center bg-indigo-100 text-indigo-800 text-sm font-medium px-2.5 py-0.5 rounded-full">
+                         {skill}
+                         <button onClick={() => deleteSkill(skill)} className="ml-2 text-indigo-500 hover:text-indigo-700">×</button>
+                     </span>
+                 ))}
+             </div>
+             <form onSubmit={addSkill} className="flex gap-2">
+                 <Input label="New Skill" value={newSkill} onChange={e => setNewSkill(e.target.value)} placeholder="e.g. JavaScript" className="flex-grow"/>
+                 <button type="submit" className="self-end px-4 py-2 text-sm font-semibold rounded-md bg-indigo-600 text-white hover:bg-indigo-700">Add</button>
+             </form>
+          </div>
+      </Accordion>
+      <Accordion title="Custom Sections">
+           <div className="p-4 space-y-4">
+              {resume.customSections.map(sec => (
+                  <div key={sec.id} className="p-4 border border-slate-200 rounded-lg space-y-3">
+                      <Input label="Section Title" value={sec.title} onChange={e => handleCustomSectionChange(sec.id, 'title', e.target.value)} />
+                       <div>
+                          <label className="text-sm font-medium text-slate-600">Content</label>
+                          <RichTextField htmlContent={sec.content} onHtmlChange={html => handleCustomSectionChange(sec.id, 'content', html)} />
+                      </div>
+                      <button onClick={() => deleteCustomSection(sec.id)} className="text-sm text-red-500 hover:text-red-700">Remove Section</button>
+                  </div>
+              ))}
+              <button onClick={addCustomSection} className="w-full px-4 py-2 text-sm font-semibold rounded-md border-2 border-dashed border-slate-300 text-slate-500 hover:border-indigo-500 hover:text-indigo-500">+ Add Custom Section</button>
+          </div>
+      </Accordion>
+    </div>
+  );
+};
+
+export default ContentEditor;
+
+
+
+test/components/editor/DesignEditor.tsx
+
+import React from 'react';
+import { Resume, TemplateId } from '../../types';
+import { TEMPLATES, THEME_COLORS } from '../../constants';
+
+interface DesignEditorProps {
+  resume: Resume;
+  onUpdate: (resume: Resume) => void;
+}
+
+const ColorDot: React.FC<{ colorClass: string; isSelected: boolean; onClick: () => void }> = ({ colorClass, isSelected, onClick }) => (
+    <button onClick={onClick} className={`w-8 h-8 rounded-full ${colorClass} transition-transform hover:scale-110 ${isSelected ? 'ring-2 ring-offset-2 ring-indigo-500' : ''}`}></button>
+);
+
+
+const DesignEditor: React.FC<DesignEditorProps> = ({ resume, onUpdate }) => {
+  const handleTemplateChange = (templateId: TemplateId) => {
+    onUpdate({ ...resume, template: templateId });
+  };
+
+  const handleColorChange = (type: 'primaryColor' | 'accentColor', value: string) => {
+      onUpdate({ ...resume, theme: { ...resume.theme, [type]: value } });
+  }
+
+  return (
+    <div className="space-y-8">
+      <div>
+        <h3 className="text-lg font-semibold text-slate-800 mb-1">Change Template</h3>
+        <p className="text-sm text-slate-500 mb-4">Your content will be preserved.</p>
+        <div className="grid grid-cols-2 gap-4">
+          {TEMPLATES.map(template => (
+            <button
+              key={template.id}
+              onClick={() => handleTemplateChange(template.id)}
+              className={`p-2 rounded-lg border-2 ${
+                resume.template === template.id ? 'border-indigo-500' : 'border-transparent'
+              }`}
+            >
+              <div className="aspect-[3/4] bg-slate-200 rounded-md flex items-center justify-center">
+                <span className="text-xs text-slate-500 px-1 text-center">{template.name}</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div>
+        <h3 className="text-lg font-semibold text-slate-800 mb-4">Theme Colors</h3>
+        <div className="space-y-4">
+          <div>
+            <h4 className="text-sm font-medium text-slate-600 mb-2">Primary Color</h4>
+            <div className="flex space-x-3">
+                {THEME_COLORS.primary.map(color => (
+                    <ColorDot key={color.value} colorClass={color.value} isSelected={resume.theme.primaryColor === color.value} onClick={() => handleColorChange('primaryColor', color.value)} />
+                ))}
+            </div>
+          </div>
+          <div>
+            <h4 className="text-sm font-medium text-slate-600 mb-2">Accent Color</h4>
+            <div className="flex space-x-3">
+               {THEME_COLORS.accent.map(color => (
+                    <ColorDot key={color.value} colorClass={color.value} isSelected={resume.theme.accentColor === color.value} onClick={() => handleColorChange('accentColor', color.value)} />
+                ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default DesignEditor;
+
+
+
+test/components/editor/EditorControls.tsx
+
+import React, { useState } from 'react';
+import { Resume } from '../../types';
+import ContentEditor from './ContentEditor';
+import DesignEditor from './DesignEditor';
+
+interface EditorControlsProps {
+  resume: Resume;
+  onUpdate: (resume: Resume) => void;
+}
+
+const EditorControls: React.FC<EditorControlsProps> = ({ resume, onUpdate }) => {
+  const [activeTab, setActiveTab] = useState<'content' | 'design'>('content');
+
+  return (
+    <div className="bg-white rounded-xl shadow-lg p-1.5">
+      <div className="flex border-b border-slate-200">
+        <button
+          onClick={() => setActiveTab('content')}
+          className={`w-1/2 py-3 text-sm font-semibold transition-colors ${
+            activeTab === 'content'
+              ? 'text-indigo-600 border-b-2 border-indigo-600'
+              : 'text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          Content
+        </button>
+        <button
+          onClick={() => setActiveTab('design')}
+          className={`w-1/2 py-3 text-sm font-semibold transition-colors ${
+            activeTab === 'design'
+              ? 'text-indigo-600 border-b-2 border-indigo-600'
+              : 'text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          Design
+        </button>
+      </div>
+      <div className="p-4 sm:p-6">
+        {activeTab === 'content' ? (
+          <ContentEditor resume={resume} onUpdate={onUpdate} />
+        ) : (
+          <DesignEditor resume={resume} onUpdate={onUpdate} />
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default EditorControls;
+
+
+
+test/components/editor/ResumePreview.tsx
+import React from 'react';
+import { Resume, TemplateId } from '../../types';
+import ModernTemplate from './templates/ModernTemplate';
+import MinimalistTemplate from './templates/MinimalistTemplate';
+import ExecutiveTemplate from './templates/ExecutiveTemplate';
+import CreativeSplitTemplate from './templates/CreativeSplitTemplate';
+
+interface ResumePreviewProps {
+  resume: Resume;
+}
+
+const ResumePreview: React.FC<ResumePreviewProps> = ({ resume }) => {
+  const renderTemplate = () => {
+    switch (resume.template) {
+      case TemplateId.Modern:
+        return <ModernTemplate resume={resume} />;
+      case TemplateId.Minimalist:
+         return <MinimalistTemplate resume={resume} />;
+      case TemplateId.Executive:
+        return <ExecutiveTemplate resume={resume} />;
+      case TemplateId.CreativeSplit:
+        return <CreativeSplitTemplate resume={resume} />;
+      default:
+        return <ModernTemplate resume={resume} />;
+    }
+  };
+
+  return (
+    <div className="aspect-[8.5/11] w-full bg-white shadow-lg">
+      {renderTemplate()}
+    </div>
+  );
+};
+
+export default ResumePreview;
+
+
+
+test/components/editor/templates/CreativeSplitTemplate.tsx
+import React from 'react';
+import { Resume } from '../../../types';
+
+interface TemplateProps {
+  resume: Resume;
+}
+
+const Section: React.FC<{ title: string; children: React.ReactNode; className?: string; titleClass?: string;}> = ({ title, children, className, titleClass }) => (
+    <div className={className}>
+        <h2 className={`text-sm font-bold uppercase tracking-widest pb-1 mb-2 ${titleClass}`}>{title}</h2>
+        {children}
+    </div>
+);
+
+
+const CreativeSplitTemplate: React.FC<TemplateProps> = ({ resume }) => {
+  const { contact, theme, summary, experience, education, skills, customSections } = resume;
+
+  return (
+    <div className="w-full h-full bg-white text-slate-800 text-[10px] leading-snug font-sans p-8">
+        {/* Header */}
+        <header className={`border-b-4 ${theme.primaryColor.replace('bg-', 'border-')} pb-4 mb-6 text-center`}>
+            <h1 className="text-4xl font-bold tracking-wider">{contact.name.toUpperCase()}</h1>
+            <p className="text-lg font-light tracking-widest">{experience[0]?.jobTitle || 'Professional'}</p>
+        </header>
+
+        <div className="grid grid-cols-3 gap-8">
+            {/* Main Column */}
+            <main className="col-span-2 space-y-6">
+                 {experience.length > 0 && (
+                    <Section title="Work Experience" titleClass={`border-b-2 ${theme.primaryColor.replace('bg-', 'border-')}`}>
+                        {experience.map(exp => (
+                            <div key={exp.id} className="mb-4">
+                                <h3 className="font-bold text-sm">{exp.jobTitle}, {exp.company}</h3>
+                                <div className="flex justify-between text-xs font-semibold text-slate-500 mb-1">
+                                    <p>{exp.location}</p>
+                                    <p>{exp.startDate} - {exp.endDate}</p>
+                                </div>
+                                <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: exp.description }} />
+                            </div>
+                        ))}
+                    </Section>
+                )}
+
+                {education.length > 0 && (
+                    <Section title="Education" titleClass={`border-b-2 ${theme.primaryColor.replace('bg-', 'border-')}`}>
+                        {education.map(edu => (
+                            <div key={edu.id} className="mb-3">
+                                <h3 className="font-bold text-sm">{edu.degree}</h3>
+                                <div className="flex justify-between text-xs font-semibold text-slate-500">
+                                    <p>{edu.school}, {edu.location}</p>
+                                    <p>{edu.startDate} - {edu.endDate}</p>
+                                </div>
+                            </div>
+                        ))}
+                    </Section>
+                )}
+            </main>
+
+            {/* Sidebar */}
+            <aside className="col-span-1 space-y-6">
+                <Section title="About Me" titleClass={`text-slate-800`}>
+                     <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: summary }} />
+                </Section>
+
+                <Section title="Contact" titleClass={`text-slate-800`}>
+                     <div className="space-y-1 text-xs">
+                        <p><strong>P:</strong> {contact.phone}</p>
+                        <p><strong>E:</strong> {contact.email}</p>
+                        <p><strong>A:</strong> {contact.address}</p>
+                        <p><strong>W:</strong> {contact.website}</p>
+                        <p><strong>L:</strong> {contact.linkedin}</p>
+                     </div>
+                </Section>
+                
+                 {skills.length > 0 && (
+                    <Section title="Skills" titleClass={`text-slate-800`}>
+                        <div className="flex flex-wrap gap-2">
+                            {skills.map(skill => <span key={skill} className={`${theme.accentColor} text-white px-2 py-1 rounded text-xs`}>{skill}</span>)}
+                        </div>
+                    </Section>
+                 )}
+
+                 {customSections.map(sec => (
+                    <Section title={sec.title} key={sec.id} titleClass={`text-slate-800`}>
+                       <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: sec.content }} />
+                    </Section>
+                ))}
+            </aside>
+        </div>
+    </div>
+  );
+};
+
+export default CreativeSplitTemplate;
+
+
+
+test/components/editor/templates/ExecutiveTemplate.tsx
+import React from 'react';
+import { Resume } from '../../../types';
+
+interface TemplateProps {
+  resume: Resume;
+}
+
+const Section: React.FC<{ title: string; children: React.ReactNode; className?: string; titleClass?: string;}> = ({ title, children, className, titleClass }) => (
+    <div className={className}>
+        <h2 className={`text-base font-bold uppercase tracking-widest pb-1 mb-2 border-b-2 ${titleClass}`}>{title}</h2>
+        {children}
+    </div>
+);
+
+
+const ExecutiveTemplate: React.FC<TemplateProps> = ({ resume }) => {
+  const { contact, theme, summary, experience, education, skills, customSections } = resume;
+
+  return (
+    <div className="w-full h-full bg-white text-slate-800 text-[10px] leading-snug font-sans flex">
+      {/* Left Column (Sidebar) */}
+      <aside className={`${theme.primaryColor} text-white p-6 w-1/3 flex flex-col`}>
+          <div className="text-center">
+            <h1 className="text-3xl font-bold tracking-wider">{contact.name.toUpperCase()}</h1>
+          </div>
+          
+          <div className="mt-8 space-y-6">
+              <Section title="Contact" titleClass="border-white/50" className="space-y-2 text-sm">
+                  <p>{contact.phone}</p>
+                  <p>{contact.email}</p>
+                  <p>{contact.address}</p>
+                  <p>{contact.linkedin}</p>
+                  <p>{contact.website}</p>
+              </Section>
+              
+              {skills.length > 0 && (
+                  <Section title="Skills" titleClass="border-white/50">
+                      <ul className="list-disc list-inside text-sm space-y-1">
+                          {skills.map(skill => <li key={skill}>{skill}</li>)}
+                      </ul>
+                  </Section>
+              )}
+          </div>
+      </aside>
+
+      {/* Right Column (Main Content) */}
+      <main className="w-2/3 p-8">
+          {summary && (
+              <Section title="Professional Summary" titleClass={`border-slate-400 text-slate-800`} className="mb-6">
+                  <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: summary }} />
+              </Section>
+          )}
+
+          {experience.length > 0 && (
+              <Section title="Work Experience" titleClass={`border-slate-400 text-slate-800`} className="mb-6">
+                  {experience.map(exp => (
+                      <div key={exp.id} className="mb-4">
+                          <h3 className="font-bold text-sm">{exp.jobTitle}</h3>
+                          <div className="flex justify-between text-xs font-semibold text-slate-600 mb-1">
+                              <p>{exp.company} | {exp.location}</p>
+                              <p>{exp.startDate} - {exp.endDate}</p>
+                          </div>
+                          <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: exp.description }} />
+                      </div>
+                  ))}
+              </Section>
+          )}
+
+          {education.length > 0 && (
+               <Section title="Education" titleClass={`border-slate-400 text-slate-800`} className="mb-6">
+                    {education.map(edu => (
+                        <div key={edu.id} className="mb-3">
+                             <h3 className="font-bold text-sm">{edu.degree}</h3>
+                            <div className="flex justify-between text-xs font-semibold text-slate-600">
+                                <p>{edu.school}, {edu.location}</p>
+                                <p>{edu.startDate} - {edu.endDate}</p>
+                            </div>
+                        </div>
+                    ))}
+                </Section>
+          )}
+
+          {customSections.map(sec => (
+                <Section title={sec.title} key={sec.id} titleClass={`border-slate-400 text-slate-800`} className="mb-6">
+                   <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: sec.content }} />
+                </Section>
+          ))}
+      </main>
+    </div>
+  );
+};
+
+export default ExecutiveTemplate;
+
+
+
+test/components/editor/templates/MinimalistTemplate.tsx
+import React from 'react';
+import { Resume } from '../../../types';
+
+interface TemplateProps {
+  resume: Resume;
+}
+
+const Section: React.FC<{ title: string; children: React.ReactNode; className?: string }> = ({ title, children, className }) => (
+    <div className={className}>
+        <h2 className={`text-xl font-bold text-slate-800 border-b-2 border-slate-200 pb-1 mb-3 uppercase tracking-widest`}>{title}</h2>
+        {children}
+    </div>
+);
+
+const MinimalistTemplate: React.FC<TemplateProps> = ({ resume }) => {
+  const { contact, theme, summary, experience, education, skills, customSections } = resume;
+
+  return (
+    <div className="w-full h-full bg-white text-slate-700 text-[10.5px] leading-relaxed font-serif p-10">
+      {/* Header */}
+      <header className="text-center mb-8">
+        <h1 className="text-5xl font-bold tracking-wider text-slate-800">{contact.name.toUpperCase()}</h1>
+        <div className={`mt-3 text-xs text-slate-500 flex items-center justify-center space-x-4`}>
+          <span>{contact.phone}</span>
+          <span className={`${theme.accentColor} w-1.5 h-1.5 rounded-full`}></span>
+          <span>{contact.email}</span>
+          <span className={`${theme.accentColor} w-1.5 h-1.5 rounded-full`}></span>
+          <span>{contact.linkedin}</span>
+           {contact.website && <>
+            <span className={`${theme.accentColor} w-1.5 h-1.5 rounded-full`}></span>
+            <span>{contact.website}</span>
+           </>}
+        </div>
+      </header>
+      
+      <main className="space-y-6">
+        {summary && (
+            <Section title="Summary">
+              <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: summary }} />
+            </Section>
+        )}
+        
+        {experience.length > 0 && (
+            <Section title="Experience">
+                {experience.map(exp => (
+                    <div key={exp.id} className="mb-4 break-inside-avoid">
+                        <div className="flex justify-between items-baseline">
+                            <h3 className="text-base font-bold text-slate-800">{exp.jobTitle}</h3>
+                            <div className="text-xs font-semibold text-slate-500">{exp.startDate} - {exp.endDate}</div>
+                        </div>
+                        <div className="flex justify-between items-baseline mb-1">
+                            <p className="font-semibold">{exp.company}</p>
+                            <p className="text-xs text-slate-500">{exp.location}</p>
+                        </div>
+                        <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: exp.description }} />
+                    </div>
+                ))}
+            </Section>
+        )}
+
+        {education.length > 0 && (
+            <Section title="Education">
+                {education.map(edu => (
+                    <div key={edu.id} className="mb-3 break-inside-avoid">
+                         <div className="flex justify-between items-baseline">
+                            <h3 className="text-base font-bold text-slate-800">{edu.degree}</h3>
+                            <div className="text-xs font-semibold text-slate-500">{edu.startDate} - {edu.endDate}</div>
+                        </div>
+                        <div className="flex justify-between items-baseline mb-1">
+                            <p className="font-semibold">{edu.school}</p>
+                            <p className="text-xs text-slate-500">{edu.location}</p>
+                        </div>
+                    </div>
+                ))}
+            </Section>
+        )}
+        
+        {skills.length > 0 && (
+            <Section title="Skills">
+                <p className="text-slate-600">
+                    {skills.join(' • ')}
+                </p>
+            </Section>
+        )}
+
+        {customSections.map(sec => (
+            <Section title={sec.title} key={sec.id}>
+                <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: sec.content }} />
+            </Section>
+        ))}
+      </main>
+    </div>
+  );
+};
+
+export default MinimalistTemplate;
+
+
+
+test/components/editor/templates/ModernTemplate.tsx
+import React from 'react';
+import { Resume } from '../../../types';
+
+interface TemplateProps {
+  resume: Resume;
+}
+
+const Section: React.FC<{ title: string; children: React.ReactNode; className?: string }> = ({ title, children, className }) => (
+    <div className={className}>
+        <h2 className="text-lg font-bold border-b-2 border-slate-300 pb-1 mb-2 uppercase tracking-wider">{title}</h2>
+        {children}
+    </div>
+);
+
+
+const ModernTemplate: React.FC<TemplateProps> = ({ resume }) => {
+  const { contact, theme, summary, experience, education, skills, customSections } = resume;
+
+  return (
+    <div className="w-full h-full bg-white text-slate-800 text-[10px] leading-snug font-sans p-8">
+      {/* Header */}
+      <div className={`p-8 text-white absolute top-0 left-0 right-0 ${theme.primaryColor}`}>
+        <h1 className="text-4xl font-bold tracking-wide">{contact.name.toUpperCase()}</h1>
+        <div className="flex justify-between items-center mt-2 text-xs">
+          <span>{contact.email}</span>
+          <span>{contact.phone}</span>
+          <span>{contact.linkedin}</span>
+          <span>{contact.website}</span>
+        </div>
+      </div>
+      
+      {/* Spacer for fixed header */}
+      <div className="h-[100px]"></div>
+
+      <div className="space-y-6">
+        {/* Professional Summary */}
+        {summary && (
+            <Section title="Professional Summary">
+              <div className="prose prose-sm max-w-none text-slate-700" dangerouslySetInnerHTML={{ __html: summary }} />
+            </Section>
+        )}
+        
+        {/* Main content split */}
+        <div className="grid grid-cols-3 gap-8">
+            <div className="col-span-2 space-y-6">
+                {/* Work Experience */}
+                {experience.length > 0 && (
+                    <Section title="Work Experience">
+                        {experience.map(exp => (
+                            <div key={exp.id} className="mb-4">
+                                <h3 className="font-bold text-sm">{exp.jobTitle}</h3>
+                                <div className="flex justify-between text-slate-600 font-semibold">
+                                    <p>{exp.company} - {exp.location}</p>
+                                    <p>{exp.startDate} - {exp.endDate}</p>
+                                </div>
+                                <div className="prose prose-sm max-w-none mt-1" dangerouslySetInnerHTML={{ __html: exp.description }} />
+                            </div>
+                        ))}
+                    </Section>
+                )}
+                
+                 {/* Education */}
+                {education.length > 0 && (
+                    <Section title="Education">
+                        {education.map(edu => (
+                            <div key={edu.id} className="mb-3">
+                                <h3 className="font-bold text-sm">{edu.degree}</h3>
+                                <div className="flex justify-between text-slate-600 font-semibold">
+                                    <p>{edu.school}, {edu.location}</p>
+                                     <p>{edu.startDate} - {edu.endDate}</p>
+                                </div>
+                            </div>
+                        ))}
+                    </Section>
+                )}
+            </div>
+
+            <div className="col-span-1 space-y-6">
+                 {/* Skills */}
+                {skills.length > 0 && (
+                    <Section title="Skills">
+                        <ul className="flex flex-wrap gap-2">
+                            {skills.map(skill => (
+                                <li key={skill} className={`${theme.accentColor} text-white px-2 py-1 rounded-md text-xs`}>{skill}</li>
+                            ))}
+                        </ul>
+                    </Section>
+                )}
+
+                 {/* Custom Sections */}
+                {customSections.map(sec => (
+                    <Section title={sec.title} key={sec.id}>
+                       <div className="prose prose-sm max-w-none" dangerouslySetInnerHTML={{ __html: sec.content }} />
+                    </Section>
+                ))}
+            </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default ModernTemplate;
+
+
+
+test/components/pages/AuthPage.tsx
+import React, { useState } from 'react';
+import { signIn, signUp } from 'aws-amplify/auth';
+
+interface AuthPageProps {
+  onLoginSuccess: () => void;
+  onNavigateToVerification: (email: string) => void;
+}
+
+const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess, onNavigateToVerification }) => {
+  const [isLoginView, setIsLoginView] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setError(null);
+    const formData = new FormData(e.currentTarget);
+    const email = formData.get('email') as string;
+    const password = formData.get('password') as string;
+
+    if (isLoginView) {
+      try {
+        const { isSignedIn } = await signIn({ username: email, password });
+        if (isSignedIn) {
+          onLoginSuccess();
+        }
+      } catch (err: any) {
+        setError(err.message || 'An error occurred during sign in.');
+      } finally {
+        setIsLoading(false);
+      }
+    } else { // Sign up
+      const firstName = formData.get('first-name') as string;
+      const lastName = formData.get('last-name') as string;
+      const confirmPassword = formData.get('confirm-password') as string;
+
+      if (password !== confirmPassword) {
+        setError("Passwords do not match.");
+        setIsLoading(false);
+        return;
+      }
+
+      try {
+        const { nextStep } = await signUp({
+          username: email,
+          password,
+          options: {
+            userAttributes: {
+              email,
+              given_name: firstName,
+              family_name: lastName,
+            },
+          },
+        });
+        if (nextStep.signUpStep === 'CONFIRM_SIGN_UP') {
+          onNavigateToVerification(email);
+        }
+      } catch (err: any) {
+        setError(err.message || 'An error occurred during sign up.');
+      } finally {
+        setIsLoading(false);
+      }
+    }
+  };
+
+  return (
+    <div className="flex min-h-full flex-col justify-center px-6 py-12 lg:px-8">
+      <div className="sm:mx-auto sm:w-full sm:max-w-sm">
+        <h1 className="text-3xl font-bold text-center text-indigo-600">ProResume</h1>
+        <h2 className="mt-6 text-center text-2xl font-bold leading-9 tracking-tight text-gray-900">
+          {isLoginView ? 'Sign in to your account' : 'Create a new account'}
+        </h2>
+      </div>
+
+      <div className="mt-10 sm:mx-auto sm:w-full sm:max-w-sm">
+        <form className="space-y-6" onSubmit={handleSubmit}>
+          {error && (
+            <div className="rounded-md bg-red-50 p-4">
+              <p className="text-sm font-medium text-red-800">{error}</p>
+            </div>
+          )}
+          {!isLoginView && (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label htmlFor="first-name" className="block text-sm font-medium leading-6 text-gray-900">
+                  First Name
+                </label>
+                <div className="mt-2">
+                  <input
+                    id="first-name"
+                    name="first-name"
+                    type="text"
+                    autoComplete="given-name"
+                    required
+                    disabled={isLoading}
+                    className="block w-full rounded-md border-0 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm sm:leading-6 p-2 disabled:bg-slate-50"
+                  />
+                </div>
+              </div>
+              <div>
+                <label htmlFor="last-name" className="block text-sm font-medium leading-6 text-gray-900">
+                  Last Name
+                </label>
+                <div className="mt-2">
+                  <input
+                    id="last-name"
+                    name="last-name"
+                    type="text"
+                    autoComplete="family-name"
+                    required
+                    disabled={isLoading}
+                    className="block w-full rounded-md border-0 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm sm:leading-6 p-2 disabled:bg-slate-50"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+          <div>
+            <label htmlFor="email" className="block text-sm font-medium leading-6 text-gray-900">
+              Email address
+            </label>
+            <div className="mt-2">
+              <input
+                id="email"
+                name="email"
+                type="email"
+                autoComplete="email"
+                required
+                disabled={isLoading}
+                className="block w-full rounded-md border-0 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm sm:leading-6 p-2 disabled:bg-slate-50"
+              />
+            </div>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between">
+              <label htmlFor="password" className="block text-sm font-medium leading-6 text-gray-900">
+                Password
+              </label>
+              {isLoginView && (
+                <div className="text-sm">
+                  <a href="#" className="font-semibold text-indigo-600 hover:text-indigo-500">
+                    Forgot password?
+                  </a>
+                </div>
+              )}
+            </div>
+            <div className="mt-2">
+              <input
+                id="password"
+                name="password"
+                type="password"
+                autoComplete={isLoginView ? "current-password" : "new-password"}
+                required
+                disabled={isLoading}
+                className="block w-full rounded-md border-0 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm sm:leading-6 p-2 disabled:bg-slate-50"
+              />
+            </div>
+          </div>
+
+          {!isLoginView && (
+            <div>
+              <label htmlFor="confirm-password" className="block text-sm font-medium leading-6 text-gray-900">
+                Confirm Password
+              </label>
+              <div className="mt-2">
+                <input
+                  id="confirm-password"
+                  name="confirm-password"
+                  type="password"
+                  autoComplete="new-password"
+                  required
+                  disabled={isLoading}
+                  className="block w-full rounded-md border-0 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm sm:leading-6 p-2 disabled:bg-slate-50"
+                />
+              </div>
+            </div>
+          )}
+
+          <div>
+            <button
+              type="submit"
+              disabled={isLoading}
+              className="flex w-full justify-center rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-semibold leading-6 text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 disabled:bg-indigo-400 disabled:cursor-not-allowed"
+            >
+              {isLoading ? 'Processing...' : (isLoginView ? 'Sign in' : 'Create Account')}
+            </button>
+          </div>
+        </form>
+
+        <p className="mt-10 text-center text-sm text-gray-500">
+          {isLoginView ? 'Not a member?' : 'Already have an account?'}{' '}
+          <button onClick={() => setIsLoginView(!isLoginView)} className="font-semibold leading-6 text-indigo-600 hover:text-indigo-500" disabled={isLoading}>
+            {isLoginView ? 'Create an account' : 'Sign in'}
+          </button>
+        </p>
+      </div>
+    </div>
+  );
+};
+
+export default AuthPage;
+
+
+
+test/components/pages/DashboardPage.tsx
+
+import React from 'react';
+import { Resume } from '../../types';
+
+interface DashboardPageProps {
+  resumes: Resume[];
+  onNewResume: () => void;
+  onEditResume: (id: string) => void;
+}
+
+const PlusIcon: React.FC<{ className?: string }> = ({ className }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+    </svg>
+);
+
+
+const DashboardPage: React.FC<DashboardPageProps> = ({ resumes, onNewResume, onEditResume }) => {
+  return (
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+      <div className="mb-8">
+        <h2 className="text-3xl font-bold text-slate-800">My Resumes</h2>
+        <p className="mt-1 text-slate-500">Create and manage your resumes that stand out.</p>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-8">
+        <button
+          onClick={onNewResume}
+          className="aspect-[3/4] border-2 border-dashed border-slate-300 rounded-xl flex flex-col items-center justify-center text-slate-500 hover:border-indigo-500 hover:text-indigo-500 transition-all duration-300"
+        >
+          <PlusIcon className="w-12 h-12 mb-2" />
+          <span className="font-medium">Create New Resume</span>
+        </button>
+        {resumes.map(resume => (
+          <div 
+            key={resume.id} 
+            onClick={() => onEditResume(resume.id)}
+            className="group relative aspect-[3/4] bg-white rounded-xl shadow-md overflow-hidden cursor-pointer transition-all duration-300 hover:shadow-xl hover:-translate-y-1"
+          >
+            <img 
+                src={`https://picsum.photos/seed/${resume.id}/400/533`} 
+                alt={resume.title}
+                className="w-full h-full object-cover"
+            />
+             <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent"></div>
+             <div className="absolute bottom-0 left-0 p-4">
+                 <h3 className="text-white font-bold text-lg">{resume.title}</h3>
+                 <p className="text-white/80 text-sm">{resume.template}</p>
+             </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+export default DashboardPage;
+
+
+
+test/components/pages/EditorPage.tsx
+
+import React, { useState, useCallback } from 'react';
+import { Resume, TemplateId } from '../../types';
+import EditorControls from '../editor/EditorControls';
+import ResumePreview from '../editor/ResumePreview';
+
+interface EditorPageProps {
+  initialResume: Resume;
+  onSave: (resume: Resume) => void;
+  onBack: () => void;
+}
+
+const EditorPage: React.FC<EditorPageProps> = ({ initialResume, onSave, onBack }) => {
+  const [resume, setResume] = useState<Resume>(initialResume);
+  const [isSaving, setIsSaving] = useState(false);
+
+  const handleUpdate = useCallback((updatedResume: Resume) => {
+    setResume(updatedResume);
+  }, []);
+
+  const handleSave = () => {
+    setIsSaving(true);
+    // Simulate async save
+    setTimeout(() => {
+        onSave(resume);
+        setIsSaving(false);
+    }, 500);
+  };
+  
+  const handleDownloadPdf = () => {
+    const { jsPDF } = window.jspdf;
+    const previewElement = document.getElementById('resume-preview');
+    if (previewElement) {
+        window.html2canvas(previewElement, { scale: 3 }).then(canvas => {
+            const imgData = canvas.toDataURL('image/png');
+            const pdf = new jsPDF({
+                orientation: 'portrait',
+                unit: 'px',
+                format: [canvas.width, canvas.height]
+            });
+            pdf.addImage(imgData, 'PNG', 0, 0, canvas.width, canvas.height);
+            pdf.save(`${resume.title.replace(/\s/g, '_')}.pdf`);
+        });
+    }
+  };
+
+  return (
+    <div className="bg-slate-100">
+      <div className="sticky top-16 z-20 bg-white/70 backdrop-blur-lg shadow-sm">
+        <div className="max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-3 flex justify-between items-center">
+            <div>
+                 <input 
+                    type="text" 
+                    value={resume.title}
+                    onChange={(e) => setResume(r => ({...r, title: e.target.value}))}
+                    className="text-xl font-bold text-slate-800 bg-transparent focus:outline-none focus:ring-1 focus:ring-indigo-500 rounded-md p-1 -m-1"
+                />
+            </div>
+          <div className="flex items-center space-x-4">
+            <button
+                onClick={handleDownloadPdf}
+                className="px-4 py-2 text-sm font-semibold rounded-md border border-indigo-600 text-indigo-600 hover:bg-indigo-50 transition-colors"
+            >
+              Download PDF
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={isSaving}
+              className="px-4 py-2 text-sm font-semibold rounded-md bg-indigo-600 text-white hover:bg-indigo-700 transition-colors disabled:bg-indigo-300"
+            >
+              {isSaving ? 'Saving...' : 'Save Resume'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-[1600px] mx-auto p-4 sm:p-6 lg:p-8 grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
+        <div className="lg:col-span-1">
+          <EditorControls resume={resume} onUpdate={handleUpdate} />
+        </div>
+        <div className="lg:col-span-2 sticky top-[130px]">
+           <div id="resume-preview-container" className="bg-white rounded-lg shadow-lg p-2 overflow-y-auto max-h-[calc(100vh-160px)]">
+             <div id="resume-preview">
+                <ResumePreview resume={resume} />
+             </div>
+           </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default EditorPage;
+
+
+
+test/components/pages/LandingPage.tsx
+
+import React from 'react';
+
+interface LandingPageProps {
+  onNavigateToAuth: () => void;
+}
+
+const LandingPage: React.FC<LandingPageProps> = ({ onNavigateToAuth }) => {
+  return (
+    <div className="relative isolate px-6 pt-14 lg:px-8">
+      <div className="absolute inset-x-0 -top-40 -z-10 transform-gpu overflow-hidden blur-3xl sm:-top-80" aria-hidden="true">
+        <div 
+          className="relative left-[calc(50%-11rem)] aspect-[1155/678] w-[36.125rem] -translate-x-1/2 rotate-[30deg] bg-gradient-to-tr from-[#8085ff] to-[#4f46e5] opacity-30 sm:left-[calc(50%-30rem)] sm:w-[72.1875rem]" 
+          style={{
+            clipPath: 'polygon(74.1% 44.1%, 100% 61.6%, 97.5% 26.9%, 85.5% 0.1%, 80.7% 2%, 72.5% 32.5%, 60.2% 62.4%, 52.4% 68.1%, 47.5% 58.3%, 45.2% 34.5%, 27.5% 76.7%, 0.1% 64.9%, 17.9% 100%, 27.6% 76.8%, 76.1% 97.7%, 74.1% 44.1%)'
+          }}
+        ></div>
+      </div>
+      <div className="mx-auto max-w-2xl py-32 sm:py-48 lg:py-56">
+        <div className="text-center">
+          <h1 className="text-4xl font-bold tracking-tight text-gray-900 sm:text-6xl">
+            Build Your Professional Resume with Ease
+          </h1>
+          <p className="mt-6 text-lg leading-8 text-gray-600">
+            Create, manage, and share a standout resume in minutes. Our AI-powered tools and professional templates make it simple to land your dream job.
+          </p>
+          <div className="mt-10 flex items-center justify-center gap-x-6">
+            <button
+              onClick={onNavigateToAuth}
+              className="rounded-md bg-indigo-600 px-3.5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+            >
+              Get started
+            </button>
+            <a href="#" className="text-sm font-semibold leading-6 text-gray-900">
+              Learn more <span aria-hidden="true">→</span>
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default LandingPage;
+
+
+
+test/components/pages/TemplateSelectionPage.tsx
+
+import React from 'react';
+import { TemplateId } from '../../types';
+import { TEMPLATES } from '../../constants';
+
+interface TemplateSelectionPageProps {
+  onSelectTemplate: (template: TemplateId) => void;
+}
+
+const TemplateSelectionPage: React.FC<TemplateSelectionPageProps> = ({ onSelectTemplate }) => {
+  return (
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+      <div className="text-center mb-12">
+        <h2 className="text-4xl font-bold tracking-tight text-gray-900">Choose Your Template</h2>
+        <p className="mt-4 text-lg leading-8 text-gray-600">
+          Select a professionally designed template to start. You can change it anytime in the editor.
+        </p>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
+        {TEMPLATES.map((template) => (
+          <div
+            key={template.id}
+            onClick={() => onSelectTemplate(template.id)}
+            className="group cursor-pointer"
+          >
+            <div className="aspect-[3/4] bg-white rounded-xl shadow-lg overflow-hidden transition-all duration-300 group-hover:shadow-2xl group-hover:-translate-y-2">
+              <img src={template.imageUrl} alt={template.name} className="w-full h-full object-cover" />
+            </div>
+            <div className="text-center mt-4">
+              <h3 className="text-lg font-semibold text-slate-800">{template.name}</h3>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+export default TemplateSelectionPage;
+
+
+
+test/components/pages/VerificationPage.tsx
+import React, { useState } from 'react';
+import { confirmSignUp, resendSignUpCode } from 'aws-amplify/auth';
+
+interface VerificationPageProps {
+  email: string;
+  onVerificationSuccess: () => void;
+  onBackToAuth: () => void;
+}
+
+const VerificationPage: React.FC<VerificationPageProps> = ({ email, onVerificationSuccess, onBackToAuth }) => {
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setError(null);
+    const formData = new FormData(e.currentTarget);
+    const code = formData.get('code') as string;
+
+    try {
+      const { isSignUpComplete } = await confirmSignUp({ username: email, confirmationCode: code });
+      if (isSignUpComplete) {
+        onVerificationSuccess();
+      }
+    } catch (err: any) {
+      setError(err.message || 'Invalid verification code. Please try again.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  
+  const handleResendCode = async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+        await resendSignUpCode({ username: email });
+        alert('A new verification code has been sent to your email.');
+    } catch (err: any) {
+        setError(err.message || 'Error resending code. Please wait a moment and try again.');
+    } finally {
+        setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="flex min-h-full flex-col justify-center px-6 py-12 lg:px-8">
+      <div className="sm:mx-auto sm:w-full sm:max-w-sm">
+        <h1 className="text-3xl font-bold text-center text-indigo-600">ProResume</h1>
+        <h2 className="mt-6 text-center text-2xl font-bold leading-9 tracking-tight text-gray-900">
+          Verify your account
+        </h2>
+        <p className="mt-2 text-center text-sm text-gray-600">
+          We've sent a verification code to <span className="font-medium text-gray-800">{email}</span>. Please enter it below.
+        </p>
+      </div>
+
+      <div className="mt-10 sm:mx-auto sm:w-full sm:max-w-sm">
+        <form className="space-y-6" onSubmit={handleSubmit}>
+          {error && (
+            <div className="rounded-md bg-red-50 p-4">
+              <p className="text-sm font-medium text-red-800">{error}</p>
+            </div>
+          )}
+          <div>
+            <label htmlFor="code" className="block text-sm font-medium leading-6 text-gray-900">
+              Verification Code
+            </label>
+            <div className="mt-2">
+              <input
+                id="code"
+                name="code"
+                type="text"
+                required
+                disabled={isLoading}
+                placeholder="Enter 6-digit code"
+                className="block w-full rounded-md border-0 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm sm:leading-6 p-2 disabled:bg-slate-50"
+              />
+            </div>
+          </div>
+
+          <div>
+            <button
+              type="submit"
+              disabled={isLoading}
+              className="flex w-full justify-center rounded-md bg-indigo-600 px-3 py-1.5 text-sm font-semibold leading-6 text-white shadow-sm hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 disabled:bg-indigo-400 disabled:cursor-not-allowed"
+            >
+              {isLoading ? 'Verifying...' : 'Verify Account'}
+            </button>
+          </div>
+        </form>
+
+        <p className="mt-10 text-center text-sm text-gray-500">
+          Didn't get a code?{' '}
+          <button onClick={handleResendCode} disabled={isLoading} className="font-semibold leading-6 text-indigo-600 hover:text-indigo-500 disabled:text-indigo-400">
+            Resend
+          </button>
+          {' or '}
+           <button onClick={onBackToAuth} disabled={isLoading} className="font-semibold leading-6 text-indigo-600 hover:text-indigo-500 disabled:text-indigo-400">
+            Go Back
+          </button>
+        </p>
+      </div>
+    </div>
+  );
+};
+
+export default VerificationPage;
+
+
+
+test/components/ui/Accordion.tsx
+import React, { useState, ReactNode } from 'react';
+
+interface AccordionProps {
+  title: string;
+  children: ReactNode;
+  initialOpen?: boolean;
+}
+
+const ChevronDownIcon: React.FC<{ className?: string }> = ({ className }) => (
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+    </svg>
+);
+
+
+const Accordion: React.FC<AccordionProps> = ({ title, children, initialOpen = false }) => {
+  const [isOpen, setIsOpen] = useState(initialOpen);
+
+  return (
+    <div className="border border-slate-200 rounded-lg overflow-hidden">
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="w-full flex justify-between items-center p-4 bg-slate-50 hover:bg-slate-100 focus:outline-none"
+      >
+        <h3 className="font-semibold text-slate-700">{title}</h3>
+        <ChevronDownIcon
+          className={`w-5 h-5 text-slate-500 transition-transform duration-300 ${
+            isOpen ? 'rotate-180' : ''
+          }`}
+        />
+      </button>
+      <div
+        className={`transition-all duration-300 ease-in-out overflow-hidden ${
+          isOpen ? 'max-h-[2000px] opacity-100' : 'max-h-0 opacity-0'
+        }`}
+      >
+        <div className="bg-white">{children}</div>
+      </div>
+    </div>
+  );
+};
+
+export default Accordion;
+
+
+
+test/components/ui/RichTextField.tsx
+import React, { useRef, useCallback } from 'react';
+
+// SVG Icons for the toolbar
+const BoldIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-5 h-5"><path fillRule="evenodd" d="M4.25 5.5a.75.75 0 0 0 0 1.5h5.5a.75.75 0 0 0 0-1.5h-5.5Zm0 4a.75.75 0 0 0 0 1.5h5.5a.75.75 0 0 0 0-1.5h-5.5Zm0 4a.75.75 0 0 0 0 1.5h5.5a.75.75 0 0 0 0-1.5h-5.5Z" clipRule="evenodd" /></svg>
+);
+const ItalicIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-5 h-5"><path d="M7.75 5.5a.75.75 0 0 0 0 1.5h1.22l-2.43 6.5H5a.75.75 0 0 0 0 1.5h5.5a.75.75 0 0 0 0-1.5H9.28l2.43-6.5H13a.75.75 0 0 0 0-1.5H7.75Z" /></svg>
+);
+const ListIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="w-5 h-5"><path fillRule="evenodd" d="M2 4.75A.75.75 0 0 1 2.75 4h14.5a.75.75 0 0 1 0 1.5H2.75A.75.75 0 0 1 2 4.75ZM2 9.75A.75.75 0 0 1 2.75 9h14.5a.75.75 0 0 1 0 1.5H2.75A.75.75 0 0 1 2 9.75Zm0 5A.75.75 0 0 1 2.75 14h14.5a.75.75 0 0 1 0 1.5H2.75A.75.75 0 0 1 2 14.75Z" clipRule="evenodd" /></svg>
+);
+
+interface RichTextFieldProps {
+  htmlContent: string;
+  onHtmlChange: (html: string) => void;
+}
+
+const RichTextField: React.FC<RichTextFieldProps> = ({ htmlContent, onHtmlChange }) => {
+  const editorRef = useRef<HTMLDivElement>(null);
+  // To prevent cursor jumping on every keystroke, we compare content
+  const lastContent = useRef(htmlContent);
+
+  const handleContentChange = useCallback(() => {
+    if (editorRef.current) {
+      const newHtml = editorRef.current.innerHTML;
+      if (newHtml !== lastContent.current) {
+        lastContent.current = newHtml;
+        onHtmlChange(newHtml);
+      }
+    }
+  }, [onHtmlChange]);
+
+  const execCmd = (command: string) => {
+    // Note: execCommand is deprecated but is the simplest way for this requirement.
+    // For a production app, a library like Tiptap/Lexical would be better.
+    document.execCommand(command, false, undefined);
+    if (editorRef.current) {
+        editorRef.current.focus();
+        handleContentChange();
+    }
+  };
+
+  // Sync external changes to the editor without losing cursor position
+  if (editorRef.current && htmlContent !== editorRef.current.innerHTML) {
+    editorRef.current.innerHTML = htmlContent;
+  }
+
+  return (
+    <div className="border border-slate-300 rounded-md focus-within:ring-1 focus-within:ring-indigo-500 focus-within:border-indigo-500">
+      <div className="toolbar flex items-center p-1 bg-slate-50 border-b border-slate-300 rounded-t-md">
+        <button type="button" onClick={() => execCmd('bold')} className="p-1 rounded hover:bg-slate-200" aria-label="Bold"><BoldIcon /></button>
+        <button type="button" onClick={() => execCmd('italic')} className="p-1 rounded hover:bg-slate-200" aria-label="Italic"><ItalicIcon /></button>
+        <button type="button" onClick={() => execCmd('insertUnorderedList')} className="p-1 rounded hover:bg-slate-200" aria-label="Bulleted List"><ListIcon /></button>
+      </div>
+      <div
+        ref={editorRef}
+        contentEditable
+        onInput={handleContentChange}
+        dangerouslySetInnerHTML={{ __html: htmlContent }}
+        className="prose prose-sm max-w-none p-2 min-h-[100px] focus:outline-none"
+      />
+    </div>
+  );
+};
+
+export default RichTextField;
+
+
+
