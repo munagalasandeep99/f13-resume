@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback, useEffect } from 'react';
 import { Page, TemplateId, Resume } from './types';
 import Header from './components/Header';
@@ -139,34 +140,41 @@ const App: React.FC = () => {
       );
     }
 
-    if (!isAuthenticated) {
-        switch (currentPage) {
-            case Page.Landing:
-                return <LandingPage onNavigateToAuth={() => navigateTo(Page.Auth)} />;
-            case Page.Auth:
-                 return <AuthPage onLoginSuccess={handleLoginSuccess} onNavigateToVerification={navigateToVerification}/>;
-            case Page.Verification:
-                 return <VerificationPage email={verificationEmail} onVerificationSuccess={handleVerificationSuccess} onBackToAuth={() => navigateTo(Page.Auth)} />;
-            default:
-                return <LandingPage onNavigateToAuth={() => navigateTo(Page.Auth)} />;
-        }
-    }
-
-    switch (currentPage) {
-      case Page.Dashboard:
-        return <DashboardPage resumes={resumes} onNewResume={startNewResume} onEditResume={editResume} />;
-      case Page.TemplateSelection:
-        return <TemplateSelectionPage onSelectTemplate={selectTemplate} />;
-      case Page.Editor:
-        if (editingResume) {
-          return <EditorPage initialResume={editingResume} onSave={saveResume} onBack={() => setCurrentPage(Page.Dashboard)} />;
-        }
-        // Fallback if no resume is being edited
-        setCurrentPage(Page.Dashboard);
-        return null; 
-      default:
-        setCurrentPage(Page.Dashboard);
-        return <DashboardPage resumes={resumes} onNewResume={startNewResume} onEditResume={editResume}/>;
+    if (isAuthenticated) {
+      switch (currentPage) {
+        case Page.Dashboard:
+          return <DashboardPage resumes={resumes} onNewResume={startNewResume} onEditResume={editResume} />;
+        case Page.TemplateSelection:
+          return <TemplateSelectionPage onSelectTemplate={selectTemplate} />;
+        case Page.Editor:
+          if (editingResume) {
+            return <EditorPage initialResume={editingResume} onSave={saveResume} onBack={() => setCurrentPage(Page.Dashboard)} />;
+          }
+          // Fallback if no resume is being edited, redirect to dashboard.
+          setCurrentPage(Page.Dashboard);
+          return <DashboardPage resumes={resumes} onNewResume={startNewResume} onEditResume={editResume} />;
+        case Page.Landing:
+        case Page.Auth:
+        case Page.Verification:
+        default:
+          // Authenticated users on public/unknown pages are redirected to the dashboard.
+          setCurrentPage(Page.Dashboard);
+          return <DashboardPage resumes={resumes} onNewResume={startNewResume} onEditResume={editResume} />;
+      }
+    } else {
+      // Unauthenticated users
+      switch (currentPage) {
+        case Page.Landing:
+          return <LandingPage onNavigateToAuth={() => navigateTo(Page.Auth)} />;
+        case Page.Auth:
+          return <AuthPage onLoginSuccess={handleLoginSuccess} onNavigateToVerification={navigateToVerification} />;
+        case Page.Verification:
+          return <VerificationPage email={verificationEmail} onVerificationSuccess={handleVerificationSuccess} onBackToAuth={() => navigateTo(Page.Auth)} />;
+        default:
+          // Unauthenticated users on protected/unknown pages are redirected to the landing page.
+          setCurrentPage(Page.Landing);
+          return <LandingPage onNavigateToAuth={() => navigateTo(Page.Auth)} />;
+      }
     }
   };
 
